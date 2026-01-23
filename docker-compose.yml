@@ -49,4 +49,5 @@ services:
       touch /var/log/cron/corn.log && 
       cron -f &&
       tail -f /var/log/cron/cron.log
-      "
+      " 
+    # 修改测试
