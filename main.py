@@ -30,20 +30,73 @@ from paper import ArxivPaper
 from llm import set_global_llm
 import feedparser
 
-def get_zotero_corpus(id:str,key:str) -> list[dict]:
-    zot = zotero.Zotero(id, 'user', key)
-    collections = zot.everything(zot.collections())
-    collections = {c['key']:c for c in collections}
-    corpus = zot.everything(zot.items(itemType='conferencePaper || journalArticle || preprint'))
-    corpus = [c for c in corpus if c['data']['abstractNote'] != '']
-    def get_collection_path(col_key:str) -> str:
-        if p := collections[col_key]['data']['parentCollection']:
-            return get_collection_path(p) + '/' + collections[col_key]['data']['name']
-        else:
-            return collections[col_key]['data']['name']
+# def get_zotero_corpus(id:str,key:str) -> list[dict]:
+#     zot = zotero.Zotero(id, 'user', key)
+#     collections = zot.everything(zot.collections())
+#     collections = {c['key']:c for c in collections}
+#     corpus = zot.everything(zot.items(itemType='conferencePaper || journalArticle || preprint'))
+#     corpus = [c for c in corpus if c['data']['abstractNote'] != '']
+#     def get_collection_path(col_key:str) -> str:
+#         if p := collections[col_key]['data']['parentCollection']:
+#             return get_collection_path(p) + '/' + collections[col_key]['data']['name']
+#         else:
+#             return collections[col_key]['data']['name']
+#     for c in corpus:
+#         paths = [get_collection_path(col) for col in c['data']['collections']]
+#         c['paths'] = paths
+#     return corpus
+
+def get_zotero_corpus(id: str, key: str) -> list[dict]:
+    """
+    宽松版：输出结构与原函数保持一致（list[dict]，并为每条 item 添加 'paths' 字段）。
+
+    变化点（更宽松）：
+    1) 不再用 itemType 的“||”表达式（Zotero API 不支持），改为先拉全量再本地过滤；
+    2) 不再强制要求 abstractNote 非空（否则大量真实论文会被过滤掉）；
+    3) 对缺失字段（abstractNote/collections/parentCollection）做健壮处理，避免 KeyError；
+    4) collections 不存在/无法解析时，paths 仍返回空列表，保持字段一致。
+    """
+    zot = zotero.Zotero(id, "user", key)
+
+    # 读取 collections（用于路径展开）
+    collections_raw = zot.everything(zot.collections())
+    collections = {c.get("key"): c for c in collections_raw if c.get("key")}
+
+    # 先拉全量 items，再本地过滤 itemType（更稳健）
+    items = zot.everything(zot.items())
+
+    # 你原先想要的三类；如需更宽松，可在此集合里加：{"bookSection","report","thesis","manuscript"} 等
+    allowed_types = {"conferencePaper", "journalArticle", "preprint"}
+
+    corpus: list[dict] = []
+    for it in items:
+        data = it.get("data", {})
+        if data.get("itemType") in allowed_types:
+            corpus.append(it)
+
+    def get_collection_path(col_key: str) -> str:
+        """将 collection key 递归展开为 'A/B/C' 路径。遇到缺失则返回空字符串。"""
+        col = collections.get(col_key)
+        if not col:
+            return ""
+        col_data = col.get("data", {})
+        name = col_data.get("name", "") or ""
+        parent = col_data.get("parentCollection")
+        if parent:
+            prefix = get_collection_path(parent)
+            return f"{prefix}/{name}" if prefix else name
+        return name
+
     for c in corpus:
-        paths = [get_collection_path(col) for col in c['data']['collections']]
-        c['paths'] = paths
+        col_keys = c.get("data", {}).get("collections") or []
+        # 保持输出与原来一致：每个 item 都加 'paths' 字段（list[str]）
+        paths = []
+        for ck in col_keys:
+            p = get_collection_path(ck)
+            if p:  # 去掉无法解析的空路径
+                paths.append(p)
+        c["paths"] = paths
+
     return corpus
 
 def filter_corpus(corpus:list[dict], pattern:str) -> list[dict]:
